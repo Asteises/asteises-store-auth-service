@@ -28,14 +28,24 @@ pipeline {
             }
         }
 
-        stage('Build') {
+        stage('Build (JDK 25)') {
+            // Сборка идёт в контейнере с JDK 25,
+            // чтобы не зависеть от Java на контроллере Jenkins.
+            agent {
+                docker {
+                    image 'eclipse-temurin:25-jdk' // JDK 25 (OpenJDK/Temurin)
+                    args '-v $HOME/.m2:/root/.m2'  // кеш maven локально
+                }
+            }
             steps {
+                // комментарий: используем локально установленный в Jenkins Maven,
+                // он будет в PATH, JDK берётся из контейнера
+                sh 'mvn -version'               // контроль, что видим Java 25
                 sh 'mvn clean package -DskipTests'
             }
             post {
                 success {
-                    archiveArtifacts 'target/*.jar'
-                }
+            archiveArtifacts 'target/*.jar'
             }
         }
 

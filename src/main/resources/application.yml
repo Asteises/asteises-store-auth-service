@@ -14,7 +14,20 @@ spring:
     properties:
       hibernate.jdbc.time_zone: UTC
       hibernate.format_sql: true
+      hibernate:
+        jdbc:
+          lob:
+            non_contextual_creation: true
     open-in-view: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
 
 server:
   port: 7001
