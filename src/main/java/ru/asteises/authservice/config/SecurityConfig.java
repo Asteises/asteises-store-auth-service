@@ -2,10 +2,8 @@ package ru.asteises.authservice.config;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.actuate.autoconfigure.security.reactive.EndpointRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
@@ -19,13 +17,14 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import ru.asteises.authservice.security.AppUserDetailsService;
 
 @Configuration
 @EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
-    private final UserDetailsService userDetailsService;
+    private final AppUserDetailsService userDetailsService;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -47,28 +46,23 @@ public class SecurityConfig {
         return new ProviderManager(provider);
     }
 
-    @Bean
-    @Order(1)
-    public SecurityFilterChain actuatorSecurity(HttpSecurity http) throws Exception {
-        http
-                .securityMatcher(String.valueOf(EndpointRequest.toAnyEndpoint()))
-                .csrf(AbstractHttpConfigurer::disable)
-                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(reg -> reg
-                        .requestMatchers(String.valueOf(EndpointRequest.to("health", "info"))).permitAll()
-                        .anyRequest().authenticated()
-                )
-                .httpBasic(Customizer.withDefaults());
-        return http.build();
+    @PostConstruct
+    public void verifyUserDetailsService() {
+        try {
+            userDetailsService.loadUserByUsername("admin@local");
+            System.out.println("[AUTH BOOT] UserDetailsService is alive (admin@local resolvable)");
+        } catch (Exception e) {
+            System.out.println("[AUTH BOOT] UserDetailsService check failed: " + e.getMessage());
+        }
     }
 
     @Bean
-    @Order(2)
     public SecurityFilterChain apiSecurity(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(reg -> reg
+                        .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers(HttpMethod.GET, "/").permitAll()
                         .anyRequest().authenticated()
@@ -76,29 +70,4 @@ public class SecurityConfig {
                 .httpBasic(Customizer.withDefaults());
         return http.build();
     }
-
-    @PostConstruct
-    public void verifyUserDetailsService() {
-        try {
-            userDetailsService.loadUserByUsername("admin@local"); // email, который ты ожидаешь в dev
-            System.out.println("[AUTH BOOT] UserDetailsService is alive (admin@local resolvable)");
-        } catch (Exception e) {
-            System.out.println("[AUTH BOOT] UserDetailsService check failed: " + e.getMessage());
-        }
-    }
-
-//    @Bean
-//    public SecurityFilterChain apiSecurity(HttpSecurity http) throws Exception {
-//        http
-//                .csrf(AbstractHttpConfigurer::disable)
-//                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-//                .authorizeHttpRequests(reg -> reg
-//                        .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-//                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
-//                        .requestMatchers(HttpMethod.GET, "/").permitAll()
-//                        .anyRequest().authenticated()
-//                )
-//                .httpBasic(Customizer.withDefaults());
-//        return http.build();
-//    }
 }
