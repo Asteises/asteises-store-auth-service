@@ -22,7 +22,7 @@ import ru.asteises.authservice.security.AppUserDetailsService;
 @Configuration
 @EnableMethodSecurity
 @RequiredArgsConstructor
-public class SecurityConfig {
+public class SecurityConfiguration {
 
     private final AppUserDetailsService userDetailsService;
 
@@ -34,7 +34,6 @@ public class SecurityConfig {
     @Bean
     public org.springframework.context.ApplicationListener<org.springframework.security.authentication.event.AbstractAuthenticationEvent> authEventsLogger() {
         return event -> {
-            // Переводим в DEBUG/INFO как тебе удобнее; сейчас INFO, чтобы в логах контейнера точно увидел.
             System.out.println("[AUTH EVENT] " + event.getClass().getSimpleName() + " -> " + event.getAuthentication());
         };
     }
@@ -57,11 +56,11 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf
                         .ignoringRequestMatchers(EndpointRequest.toAnyEndpoint())
-                        .disable() // или оставить только для API endpoints
+                        .disable()
                 )
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth

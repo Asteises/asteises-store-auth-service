@@ -38,6 +38,10 @@ pipeline {
             steps {
                 sh 'java -version && mvn -version'
                 sh 'mvn -B -V clean package -DskipTests'
+                sh '''
+                      echo "[debug] classes in jar related to Security*:"
+                      jar tf target/*.jar | grep -E 'ru/asteises/authservice/config/.*Security.*\\.class' || true
+                    '''
             }
             post {
                 success {
@@ -60,6 +64,8 @@ pipeline {
                         "${IMAGE_NAME}:${VERSION}",
                         "--pull --no-cache ."
                     )
+                    def builtId = sh(script: "docker images --format '{{.ID}}' ${IMAGE_NAME}:${VERSION}", returnStdout: true).trim()
+                    echo "[debug] built image id: ${builtId}"
                     sh '''
                         echo "[debug] local images after build:"
                         docker images | awk 'NR==1 || $1 ~ /^auth-service$/'
@@ -73,10 +79,13 @@ pipeline {
                 script {
                     // Останавливаем и удаляем старые контейнеры
                     sh 'docker compose -f docker-compose.yml down || true'
+                    sh 'docker rm -f auth-service || true'
 
                     // Запускаем приложение
-                    sh 'IMAGE_TAG="$VERSION" docker compose -f docker-compose.yml up -d --no-build --pull never'
+                    sh 'IMAGE_TAG="$VERSION" docker compose -f docker-compose.yml up -d --no-build --pull never --force-recreate'
 
+def runningImg = sh(script: "docker inspect auth-service --format '{{.Image}}'", returnStdout: true).trim()
+echo "[debug] running image id: ${runningImg}"
                     // Ждем готовности БД
 //                     sh '''
 //                         until docker exec bootlegbricks-db pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"; do
@@ -84,12 +93,20 @@ pipeline {
 //                         sleep 5
 //                         done
 //                     '''
-                    sh '''
-                        echo "[debug] running image:"
-                        docker inspect auth-service --format '{{.Config.Image}}'
-                        echo "[debug] runtime java version:"
-                        docker exec auth-service java -version || true
-                    '''
+sh '''
+  echo "[debug] running image:"
+  docker inspect auth-service --format '{{.Config.Image}}' || true
+
+  echo "[debug] runtime java version:"
+  docker exec auth-service java -version || true
+
+  echo "[debug] classes in /app/app.jar (container) matching Security*:"
+  docker exec auth-service sh -lc "jar tf /app/app.jar | grep -E 'ru/asteises/authservice/config/.*Security.*\\.class' || true"
+
+  echo "[debug] classes in local target/*.jar matching Security*:"
+  jar tf target/*.jar | grep -E 'ru/asteises/authservice/config/.*Security.*\\.class' || true
+'''
+
                 }
             }
         }

@@ -21,7 +21,7 @@ public class DataBootstrap {
     @Bean
     CommandLineRunner ensureAdmin() {
         return args -> {
-            users.findByEmail("admin@local").ifPresent(u -> { /* уже есть — выходим */ });
+            users.findByEmail("admin@local").ifPresent(u -> { });
             if (users.findByEmail("admin@local").isEmpty()) {
                 RoleEntity adminRole = roles.findByCode("ROLE_ADMIN")
                         .orElseThrow(() -> new IllegalStateException("ROLE_ADMIN not found. Run SQL bootstrap first."));
