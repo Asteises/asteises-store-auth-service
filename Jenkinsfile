@@ -1,170 +1,123 @@
 pipeline {
-    agent any
+  agent any
+  tools { maven "Maven_3.9.11" }
+  options {
+     timestamps()
+     ansiColor('xterm')
+     disableConcurrentBuilds()
+  }
+  environment {
+    DOCKER_TAG = "${env.BUILD_NUMBER}-${new Date().format('yyyyMMddHHmm')}"
 
-    tools {
-        maven "Maven_3.9.11"
+    DOCKER_INNER_PORT = 7001
+    DOCKER_NETWORK = 'bootlegbricks-network'
+
+    PROD_BRANCH = 'master'
+    PROD_DOCKER_NAME = 'bootlegbricks-auth-service-prod'
+    PROD_DOCKER_OUTER_PORT = '7001'
+
+    DEV_BRANCH = 'dev'
+    DEV_DOCKER_NAME = 'bootlegbricks-auth-service-dev'
+    DEV_DOCKER_OUTER_PORT = '7001'
+    POSTGRES_DB = credentials('POSTGRES_DB')
+    POSTGRES_USER = credentials('POSTGRES_USER')
+    POSTGRES_PASSWORD = credentials('POSTGRES_PASSWORD')
+  }
+
+  stages {
+
+    stage('Set Environment Variables') {
+      when { branch pattern: "${PROD_BRANCH}|${DEV_BRANCH}", comparator: "REGEXP" }
+      steps {
+        script {
+            def isDev = (env.BRANCH_NAME == DEV_BRANCH)
+            env.SPRING_PROFILES_ACTIVE = isDev ? 'dev' : 'prod'
+            env.DATABASE_HOST = 'bootlegbricks-db'
+            env.DATABASE_PORT = '5432'
+            echo "Selected environment: ${env.BRANCH_NAME}, profile: ${SPRING_PROFILES_ACTIVE}"
+        }
+      }
     }
 
-    options {
-      timestamps()
-      ansiColor('xterm')
-      disableConcurrentBuilds()
+//     stage('Tests') {
+//       when { branch "${DEV_BRANCH}" }
+//       steps {
+//         sh 'mvn -B -q -Dspring.profiles.active=test test'
+//         echo 'Unit tests passed'
+//         sh 'mvn -B -q -Dspring.profiles.active=test verify'
+//         echo 'Testcontainers tests passed'
+//       }
+//     }
+
+    stage('Build app') {
+      when { branch pattern: "${PROD_BRANCH}|${DEV_BRANCH}", comparator: "REGEXP" }
+      steps {
+        sh "mvn clean package -DskipTests"
+        echo 'Building the application success...'
+      }
     }
 
-    environment {
-        IMAGE_NAME = 'auth-service'
-        VERSION = "${env.BUILD_ID}"
-
-        POSTGRES_DB = credentials('POSTGRES_DB')
-        POSTGRES_USER = credentials('POSTGRES_USER')
-        POSTGRES_PASSWORD = credentials('POSTGRES_PASSWORD')
+    stage('Build new Docker image') {
+      when { branch pattern: "${PROD_BRANCH}|${DEV_BRANCH}", comparator: "REGEXP" }
+      steps {
+        script {
+          def containerName = (env.BRANCH_NAME == DEV_BRANCH) ? DEV_DOCKER_NAME : PROD_DOCKER_NAME
+          sh """
+            docker version
+            docker build -t ${containerName}:${DOCKER_TAG} -f Dockerfile .
+          """
+          echo "Build new Docker image [ ${containerName} ] -> success..."
+        }
+      }
     }
 
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
+        stage('Remove old container') {
+          when { branch pattern: "${PROD_BRANCH}|${DEV_BRANCH}", comparator: "REGEXP" }
+          steps {
+            script {
+              def containerName = (env.BRANCH_NAME == DEV_BRANCH) ? DEV_DOCKER_NAME : PROD_DOCKER_NAME
+              sh """
+                if [ \$(docker ps -aq -f name=^/${containerName}\$) ]; then
+                  docker rm -f ${containerName}
+                fi
+              """
             }
+          }
         }
 
-        stage('Build (JDK 21)') {
-            agent {
-                docker {
-                  image 'maven:3.9.9-eclipse-temurin-21'
-                  args "-v ${env.HOME}/.m2:/root/.m2"
-                }
-            }
-            steps {
-                sh 'java -version && mvn -version'
-                sh 'mvn -B -V clean package -DskipTests'
-                sh '''
-                      echo "[debug] classes in jar related to Security*:"
-                      jar tf target/*.jar | grep -E 'ru/asteises/authservice/config/.*Security.*\\.class' || true
-                    '''
-            }
-            post {
-                success {
-                  archiveArtifacts 'target/*.jar'
-                }
-            }
+    stage('Run new Docker container (Deploy)') {
+      when { branch pattern: "${PROD_BRANCH}|${DEV_BRANCH}", comparator: "REGEXP" }
+      steps {
+        script {
+          if (env.BRANCH_NAME == PROD_BRANCH) {
+            sh """
+              docker run -d --restart=unless-stopped --name ${PROD_DOCKER_NAME} \
+              --network ${DOCKER_NETWORK} \
+              -p ${PROD_DOCKER_OUTER_PORT}:${DOCKER_INNER_PORT} \
+              -v bootlegbricks-auth-service-prod-logs:/app/logs \
+              -e TZ=Europe/Moscow \
+              -e SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE} \
+              -e POSTGRES_DB=${POSTGRES_DB} \
+              -e POSTGRES_USER=${POSTGRES_USER} \
+              -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+              ${PROD_DOCKER_NAME}:${DOCKER_TAG}
+            """
+          } else if (env.BRANCH_NAME == DEV_BRANCH) {
+            sh """
+              docker run -d --restart=unless-stopped --name ${DEV_DOCKER_NAME} \
+              --network ${DOCKER_NETWORK} \
+              -p ${DEV_DOCKER_OUTER_PORT}:${DOCKER_INNER_PORT} \
+              -v bootlegbricks-auth-service-dev-logs:/app/logs \
+              -e TZ=Europe/Moscow \
+              -e SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE} \
+              -e POSTGRES_DB=${POSTGRES_DB} \
+              -e POSTGRES_USER=${POSTGRES_USER} \
+              -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+              ${DEV_DOCKER_NAME}:${DOCKER_TAG}
+            """
+          }
         }
-
-
-//         stage('Unit Tests') {
-//             steps {
-//                 sh 'mvn test'
-//             }
-//         }
-
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    docker.build(
-                        "${IMAGE_NAME}:${VERSION}",
-                        "--pull --no-cache ."
-                    )
-                    def builtId = sh(script: "docker images --format '{{.ID}}' ${IMAGE_NAME}:${VERSION}", returnStdout: true).trim()
-                    echo "[debug] built image id: ${builtId}"
-                    sh '''
-                        echo "[debug] local images after build:"
-                        docker images | awk 'NR==1 || $1 ~ /^auth-service$/'
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to Dev') {
-            steps {
-                script {
-                    // Останавливаем и удаляем старые контейнеры
-                    sh 'docker compose -f docker-compose.yml down || true'
-                    sh 'docker rm -f auth-service || true'
-
-                    // Запускаем приложение
-                    sh 'IMAGE_TAG="$VERSION" docker compose -f docker-compose.yml up -d --no-build --pull never --force-recreate'
-
-def runningImg = sh(script: "docker inspect auth-service --format '{{.Image}}'", returnStdout: true).trim()
-echo "[debug] running image id: ${runningImg}"
-                    // Ждем готовности БД
-//                     sh '''
-//                         until docker exec bootlegbricks-db pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"; do
-//                         echo "[wait] postgres not ready yet..."
-//                         sleep 5
-//                         done
-//                     '''
-sh '''
-  echo "[debug] running image:"
-  docker inspect auth-service --format '{{.Config.Image}}' || true
-
-  echo "[debug] runtime java version:"
-  docker exec auth-service java -version || true
-
-  echo "[debug] classes in /app/app.jar (container) matching Security*:"
-  docker exec auth-service sh -lc "jar tf /app/app.jar | grep -E 'ru/asteises/authservice/config/.*Security.*\\.class' || true"
-
-  echo "[debug] classes in local target/*.jar matching Security*:"
-  jar tf target/*.jar | grep -E 'ru/asteises/authservice/config/.*Security.*\\.class' || true
-'''
-
-                }
-            }
-        }
-
-//         stage('Integration Tests') {
-//             steps {
-//                 sh 'mvn verify -DskipUnitTests'  // или отдельные интеграционные тесты
-//             }
-//         }
-        stage('Prune Old App Images') {
-            steps {
-                // Оставляем только два последних числовых тега (текущий и предыдущий); остальные удаляем
-                sh '''
-                          set -euo pipefail
-                          REPO="$IMAGE_NAME"
-                          KEEP_COUNT=2
-                          echo "[prune] keep last ${KEEP_COUNT} numeric tags for ${REPO}"
-
-                          # Список тегов вида 1,2,3... по убыванию (исключаем <none> и нечисловые)
-                          TAGS=$(docker images --format '{{.Repository}} {{.Tag}}' \
-                            | awk -v r="$REPO" '$1==r && $2!="<none>" && $2 ~ /^[0-9]+$/ {print $2}' \
-                            | sort -nr)
-
-                          if [ -z "$TAGS" ]; then
-                            echo "[prune] no numeric tags found for $REPO"
-                            exit 0
-                          fi
-
-                          COUNT=0
-                          for tag in $TAGS; do
-                            COUNT=$((COUNT+1))
-                            if [ $COUNT -le $KEEP_COUNT ]; then
-                              echo "[prune] keep: ${REPO}:${tag}"
-                            else
-                              echo "[prune] remove: ${REPO}:${tag}"
-                              docker rmi -f "${REPO}:${tag}" || true
-                            fi
-                          done
-
-                          # Дополнительно подчистим висячие слои (не трогает сохранённые теги)
-                          docker image prune -f || true
-
-                          echo "[prune] done."
-                          echo "[prune] remaining images:"
-                          docker images | awk 'NR==1 || $1 ~ /^'"$IMAGE_NAME"'$/'
-                '''
-            }
-        }
+      }
     }
-
-    post {
-        failure {
-            // Уведомления
-            emailext (
-                subject: "Сборка ${env.JOB_NAME} - ${env.BUILD_NUMBER} упала",
-                body: "Проверьте сборку: ${env.BUILD_URL}",
-                to: "asteises.softdev@gmail.com"
-            )
-        }
-    }
+  }
 }
