@@ -36,3 +36,4 @@ logging:
   level:
     org.springframework.security: debug
     org.springframework.jdbc.core: debug
+    org.springframework.boot.autoconfigure: debug
